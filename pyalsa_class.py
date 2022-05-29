@@ -4,32 +4,42 @@ import time
 import select
 import threading
 
-ACTIVE = "PCM Slave Active"
-CHANNELS = "PCM Slave Channels"
-FORMAT = "PCM Slave Format"
-RATE = "PCM Slave Rate"
+LOOPBACK_ACTIVE = "PCM Slave Active"
+LOOPBACK_CHANNELS = "PCM Slave Channels"
+LOOPBACK_FORMAT = "PCM Slave Format"
+LOOPBACK_RATE = "PCM Slave Rate"
+GADGET_PB_RATE = "Playback Rate"
+GADGET_CAP_RATE = "Capture Rate"
 
-INTF_PCM = alsahcontrol.interface_id['PCM']
-#INTF_MIXER = alsahcontrol.interface_id['MIXER']
-#TYPE_INTEGER = alsahcontrol.element_type['INTEGER']
-EVENT_VALUE = alsahcontrol.event_mask['VALUE']
-EVENT_INFO = alsahcontrol.event_mask['INFO']
+INTERFACE_PCM = alsahcontrol.interface_id["PCM"]
+# INTERFACE_MIXER = alsahcontrol.interface_id['MIXER']
+EVENT_VALUE = alsahcontrol.event_mask["VALUE"]
+EVENT_INFO = alsahcontrol.event_mask["INFO"]
 EVENT_REMOVE = alsahcontrol.event_mask_remove
 
-class ControlListener():
 
+class ControlListener:
     def __init__(self, device):
         self.get_card_device_subdevice(device)
-        self.hctl = alsahcontrol.HControl(self._card, mode=alsahcontrol.open_mode["NONBLOCK"])
+        self.hctl = alsahcontrol.HControl(
+            self._card, mode=alsahcontrol.open_mode["NONBLOCK"]
+        )
 
         self.elements = self.hctl.list()
 
-        self.iface_nbr = INTF_PCM
+        self.iface_nbr = INTERFACE_PCM
 
-        self._active = self.find_element(ACTIVE)
-        self._channels = self.find_element(CHANNELS)
-        self._format = self.find_element(FORMAT)
-        self._rate = self.find_element(RATE)
+        self._active = self.find_element(LOOPBACK_ACTIVE)
+        self._channels = self.find_element(LOOPBACK_CHANNELS)
+        self._format = self.find_element(LOOPBACK_FORMAT)
+        self._rate = self.find_element(LOOPBACK_RATE)
+        if self._rate is None:
+            self._rate = self.find_element(GADGET_CAP_RATE)
+
+        self._active_elem = None
+        self._channels_elem = None
+        self._format_elem = None
+        self._rate_elem = None
 
         if self._active is not None:
             self._active_elem = alsahcontrol.Element(self.hctl, self._active)
@@ -44,7 +54,6 @@ class ControlListener():
             self._rate_elem = alsahcontrol.Element(self.hctl, self._rate)
             self._rate_elem.set_callback(self)
 
-
         self._active_events = []
         self._channels_events = []
         self._format_events = []
@@ -58,27 +67,34 @@ class ControlListener():
 
     def get_card_device_subdevice(self, dev):
         parts = dev.split(",")
-        if len(parts)>=3:
-            self.subdev_nbr = int(parts[2]) 
+        if len(parts) >= 3:
+            self.subdev_nbr = int(parts[2])
         else:
-            self.subdev_nbr = 0 
-        if len(parts)>=2:
-            self.device_nbr = int(parts[1]) 
+            self.subdev_nbr = 0
+        if len(parts) >= 2:
+            self.device_nbr = int(parts[1])
         else:
-            self.device_nbr = 0 
+            self.device_nbr = 0
         self._card = parts[0]
 
     def find_element(self, wanted_name):
         found = None
         for idx, iface, dev, subdev, name, _ in self.elements:
-            #print("search", idx, dev, subdev, name)
-            if name == wanted_name and dev == self.device_nbr and subdev == self.subdev_nbr and iface == self.iface_nbr:
+            # print("search", idx, dev, subdev, name)
+            if (
+                name == wanted_name
+                and dev == self.device_nbr
+                and subdev == self.subdev_nbr
+                and iface == self.iface_nbr
+            ):
                 found = idx
                 print(f"Found control '{wanted_name}' with index {idx}")
                 break
         return found
 
     def read_value(self, elem):
+        if elem is None:
+            return None
         info = alsahcontrol.Info(elem)
         val = alsahcontrol.Value(elem)
         values = val.get_tuple(info.type, info.count)
@@ -89,11 +105,11 @@ class ControlListener():
     def callback(self, el, mask):
         if mask == EVENT_REMOVE:
             self._active = False
-        elif (mask & EVENT_INFO):
+        elif mask & EVENT_INFO:
             info = alsahcontrol.Info(el)
             if info.is_inactive:
                 self._active = False
-        elif (mask & EVENT_VALUE):
+        elif mask & EVENT_VALUE:
             val = self.read_value(el)
             self._new_events = True
             if el.numid == self._active:
@@ -104,7 +120,6 @@ class ControlListener():
                 self._format_events.append(val)
             elif el.numid == self._rate:
                 self._rate_events.append(val)
-
 
     def read_all(self):
         print("--- Current values ---")
@@ -121,7 +136,7 @@ class ControlListener():
             if pollres:
                 print("triggered")
                 self.hctl.handle_events()
-            
+
     def run(self):
         th = threading.Thread(target=self.pollingloop, daemon=True)
         th.start()
@@ -130,10 +145,9 @@ class ControlListener():
             if self._new_events:
                 self.read_all()
                 self._new_events = False
-                #print("loop", self._active_events, self._rate_events, self._format_events, self._channels_events)
+                # print("loop", self._active_events, self._rate_events, self._format_events, self._channels_events)
+
 
 if __name__ == "__main__":
     listener = ControlListener("hw:Loopback,1,0")
     listener.run()
-
-
