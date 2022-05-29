@@ -8,11 +8,12 @@ LOOPBACK_ACTIVE = "PCM Slave Active"
 LOOPBACK_CHANNELS = "PCM Slave Channels"
 LOOPBACK_FORMAT = "PCM Slave Format"
 LOOPBACK_RATE = "PCM Slave Rate"
+LOOPBACK_VOLUME = "PCM Playback Volume"
 GADGET_PB_RATE = "Playback Rate"
 GADGET_CAP_RATE = "Capture Rate"
 
 INTERFACE_PCM = alsahcontrol.interface_id["PCM"]
-# INTERFACE_MIXER = alsahcontrol.interface_id['MIXER']
+INTERFACE_MIXER = alsahcontrol.interface_id['MIXER']
 EVENT_VALUE = alsahcontrol.event_mask["VALUE"]
 EVENT_INFO = alsahcontrol.event_mask["INFO"]
 EVENT_REMOVE = alsahcontrol.event_mask_remove
@@ -27,19 +28,20 @@ class ControlListener:
 
         self.elements = self.hctl.list()
 
-        self.iface_nbr = INTERFACE_PCM
-
-        self._active = self.find_element(LOOPBACK_ACTIVE)
-        self._channels = self.find_element(LOOPBACK_CHANNELS)
-        self._format = self.find_element(LOOPBACK_FORMAT)
-        self._rate = self.find_element(LOOPBACK_RATE)
+        self._active = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
+        self._channels = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
+        self._format = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
+        self._rate = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
         if self._rate is None:
-            self._rate = self.find_element(GADGET_CAP_RATE)
+            self._rate = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
+
+        self._volume = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
 
         self._active_elem = None
         self._channels_elem = None
         self._format_elem = None
         self._rate_elem = None
+        self._volume_elem = None
 
         if self._active is not None:
             self._active_elem = alsahcontrol.Element(self.hctl, self._active)
@@ -53,11 +55,15 @@ class ControlListener:
         if self._rate is not None:
             self._rate_elem = alsahcontrol.Element(self.hctl, self._rate)
             self._rate_elem.set_callback(self)
+        if self._volume is not None:
+            self._volume_elem = alsahcontrol.Element(self.hctl, self._volume)
+            self._volume_elem.set_callback(self)
 
         self._active_events = []
         self._channels_events = []
         self._format_events = []
         self._rate_events = []
+        self._volume_events = []
         self._new_events = False
         self._active = True
 
@@ -77,15 +83,19 @@ class ControlListener:
             self.device_nbr = 0
         self._card = parts[0]
 
-    def find_element(self, wanted_name):
+    def find_element(self, wanted_name, interface, device=None, subdevice=None):
+        if device is None:
+            device=self.device_nbr
+        if subdevice is None:
+            subdevice=self.subdev_nbr
         found = None
         for idx, iface, dev, subdev, name, _ in self.elements:
-            # print("search", idx, dev, subdev, name)
+            print("search", idx, dev, subdev, name)
             if (
                 name == wanted_name
-                and dev == self.device_nbr
-                and subdev == self.subdev_nbr
-                and iface == self.iface_nbr
+                and dev == device
+                and subdev == subdevice
+                and iface == interface
             ):
                 found = idx
                 print(f"Found control '{wanted_name}' with index {idx}")
@@ -127,10 +137,11 @@ class ControlListener:
         print("Rate:", self.read_value(self._rate_elem))
         print("Channels:", self.read_value(self._channels_elem))
         print("Format:", self.read_value(self._format_elem))
+        print("Volume:", self.read_value(self._volume_elem))
 
     def pollingloop(self):
         while True:
-            time.sleep(0.1)
+            time.sleep(0.001)
             pollres = self.poller.poll()
             print(pollres)
             if pollres:
