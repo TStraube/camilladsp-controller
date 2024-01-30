@@ -18,6 +18,62 @@ EVENT_VALUE = alsahcontrol.event_mask["VALUE"]
 EVENT_INFO = alsahcontrol.event_mask["INFO"]
 EVENT_REMOVE = alsahcontrol.event_mask_remove
 
+SAMPLE_FORMATS_BY_NAME = {
+    "S8": 0,
+    "U8": 1,
+    "S16_LE": 2,
+    "S16_BE": 3,
+    "U16_LE": 4,
+    "U16_BE": 5,
+    "S24_LE": 6,
+    "S24_BE": 7,
+    "U24_LE": 8,
+    "U24_BE": 9,
+    "S32_LE": 10,
+    "S32_BE": 11,
+    "U32_LE": 12,
+    "U32_BE": 13,
+    "FLOAT_LE": 14,
+    "FLOAT_BE": 15,
+    "FLOAT64_LE": 16,
+    "FLOAT64_BE": 17,
+    "IEC958_SUBFRAME_LE": 18,
+    "IEC958_SUBFRAME_BE": 19,
+    "MU_LAW": 20,
+    "A_LAW": 21,
+    "IMA_ADPCM": 22,
+    "MPEG": 23,
+    "GSM": 24,
+    "S20_LE": 25,
+    "S20_BE": 26,
+    "U20_LE": 27,
+    "U20_BE": 28,
+    "SPECIAL": 31,
+    "S24_3LE": 32,
+    "S24_3BE": 33,
+    "U24_3LE": 34,
+    "U24_3BE": 35,
+    "S20_3LE": 36,
+    "S20_3BE": 37,
+    "U20_3LE": 38,
+    "U20_3BE": 39,
+    "S18_3LE": 40,
+    "S18_3BE": 41,
+    "U18_3LE": 42,
+    "U18_3BE": 43,
+    "G723_24": 44,
+    "G723_24_1B": 45,
+    "G723_40": 46,
+    "G723_40_1B": 47,
+    "DSD_U8": 48,
+    "DSD_U16_LE": 49,
+    "DSD_U32_LE": 50,
+    "DSD_U16_BE": 51,
+    "DSD_U32_BE": 52,
+}
+
+SAMPLE_FORMATS_BY_NUMBER = {nbr: desc for desc, nbr in SAMPLE_FORMATS_BY_NAME.items()}
+
 
 class ControlListener:
     def __init__(self, device):
@@ -65,7 +121,7 @@ class ControlListener:
         self._rate_events = []
         self._volume_events = []
         self._new_events = False
-        self._active = True
+        self._is_active = True
 
         self.poller = select.poll()
         for fd in self.hctl.poll_fds:
@@ -90,7 +146,7 @@ class ControlListener:
             subdevice=self.subdev_nbr
         found = None
         for idx, iface, dev, subdev, name, _ in self.elements:
-            print("search", idx, dev, subdev, name)
+            #print("search", idx, dev, subdev, name)
             if (
                 name == wanted_name
                 and dev == device
@@ -114,11 +170,11 @@ class ControlListener:
 
     def callback(self, el, mask):
         if mask == EVENT_REMOVE:
-            self._active = False
+            self._is_active = False
         elif mask & EVENT_INFO:
             info = alsahcontrol.Info(el)
             if info.is_inactive:
-                self._active = False
+                self._is_active = False
         elif mask & EVENT_VALUE:
             val = self.read_value(el)
             self._new_events = True
@@ -131,21 +187,32 @@ class ControlListener:
             elif el.numid == self._rate:
                 self._rate_events.append(val)
 
+
     def read_all(self):
+        active =  self.read_value(self._active_elem)
+        rate =  self.read_value(self._rate_elem)
+        channels = self.read_value(self._channels_elem)
+        sample_format = SAMPLE_FORMATS_BY_NUMBER.get(self.read_value(self._format_elem))
+        volume = self.read_value(self._volume_elem)
+        return (active, rate, channels, sample_format, volume)
+
+    def print_all(self):
+        (active, rate, channels, sample_format, volume) = self.read_all()
         print("--- Current values ---")
-        print("Active:", self.read_value(self._active_elem))
-        print("Rate:", self.read_value(self._rate_elem))
-        print("Channels:", self.read_value(self._channels_elem))
-        print("Format:", self.read_value(self._format_elem))
-        print("Volume:", self.read_value(self._volume_elem))
+        print("Active:", active)
+        print("Rate:", rate)
+        print("Channels:", channels)
+        print("Format:", sample_format)
+        print("Volume:", volume)
+        print()
 
     def pollingloop(self):
         while True:
             time.sleep(0.001)
             pollres = self.poller.poll()
-            print(pollres)
+            #print("poll result:", pollres)
             if pollres:
-                print("triggered")
+                #print("handling events")
                 self.hctl.handle_events()
 
     def run(self):
@@ -154,7 +221,24 @@ class ControlListener:
         while True:
             time.sleep(0.1)
             if self._new_events:
-                self.read_all()
+                #self.print_all()
+                while self._active_events:
+                    value = self._active_events.pop()
+                    print("Active changed to", value)
+                while self._channels_events:
+                    value = self._channels_events.pop()
+                    print("Channels changed to", value)
+                while self._format_events:
+                    value = self._format_events.pop()
+                    print("Format changed to", SAMPLE_FORMATS_BY_NUMBER.get(value))
+                while self._rate_events:
+                    value = self._rate_events.pop()
+                    print("Rate changed to", value)
+                while self._volume_events:
+                    value = self._volume_events.pop()
+                    print("Volume changed to", value)
+
+
                 self._new_events = False
                 # print("loop", self._active_events, self._rate_events, self._format_events, self._channels_events)
 
