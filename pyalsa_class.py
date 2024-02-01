@@ -93,43 +93,25 @@ class ControlListener:
 
         self.all_device_controls = self.hctl.list()
 
-        self._ctl_active = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
-        self._ctl_channels = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
-        self._ctl_format = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
-        self._ctl_rate = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
-        if self._ctl_rate is None:
-            self._ctl_rate = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
-        self._ctl_volume = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
+        self._controls = {}
+        self._controls["Active"] = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
+        self._controls["Channels"] = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
+        self._controls["Format"] = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
+        self._controls["Rate"] = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
+        if self._controls["Rate"] is None:
+            self._controls["Rate"] = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
+        self._controls["Volume"] = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
 
-        self._elem_active = None
-        self._elem_channels = None
-        self._elem_format = None
-        self._elem_rate = None
-        self._elem_volume = None
+        self._control_elements = {}
+        for desc, control in self._controls.items():
+            if control is not None:
+                element = alsahcontrol.Element(self.hctl, control)
+                element.set_callback(self)
+                self._control_elements[control] = {"element": element, "events": []}
 
-        if self._ctl_active is not None:
-            self._elem_active = alsahcontrol.Element(self.hctl, self._ctl_active)
-            self._elem_active.set_callback(self)
-        if self._ctl_channels is not None:
-            self._elem_channels = alsahcontrol.Element(self.hctl, self._ctl_channels)
-            self._elem_channels.set_callback(self)
-        if self._ctl_format is not None:
-            self._elem_format = alsahcontrol.Element(self.hctl, self._ctl_format)
-            self._elem_format.set_callback(self)
-        if self._ctl_rate is not None:
-            self._elem_rate = alsahcontrol.Element(self.hctl, self._ctl_rate)
-            self._elem_rate.set_callback(self)
-        if self._ctl_volume is not None:
-            self._elem_volume = alsahcontrol.Element(self.hctl, self._ctl_volume)
-            self._elem_volume.set_callback(self)
-
-        self._active_events = []
-        self._channels_events = []
-        self._format_events = []
-        self._rate_events = []
-        self._volume_events = []
         self._new_events = False
-        self._is_active = True
+        self._is_removed = False
+        self._is_inactive = False
 
         self.poller = select.poll()
         for fd in self.hctl.poll_fds:
@@ -158,7 +140,6 @@ class ControlListener:
             subdevice=self.subdev_nbr
         found = None
         for idx, iface, dev, subdev, name, _ in self.all_device_controls:
-            #print("search", idx, dev, subdev, name)
             if (
                 name == wanted_name
                 and dev == device
@@ -182,42 +163,45 @@ class ControlListener:
 
     def callback(self, el, mask):
         if mask == EVENT_REMOVE:
-            self._is_active = False
+            #TODO check if this is relevant for loopback and gadget
+            self._is_removed = True
         elif mask & EVENT_INFO:
+            #TODO check if this is relevant for loopback and gadget
             info = alsahcontrol.Info(el)
             if info.is_inactive:
-                self._is_active = False
+                self._is_inactive = True
         elif mask & EVENT_VALUE:
             val = self.read_value(el)
             self._new_events = True
-            if el.numid == self._ctl_active:
-                self._active_events.append(val)
-            elif el.numid == self._ctl_channels:
-                self._channels_events.append(val)
-            elif el.numid == self._ctl_format:
-                self._format_events.append(val)
-            elif el.numid == self._ctl_rate:
-                self._rate_events.append(val)
-            elif el.numid == self._ctl_volume:
-                self._volume_events.append(val)
+            if el.numid in self._control_elements:
+                self._control_elements[el.numid]["events"].append(val)
 
+    def read_control_value(self, name):
+        control = self._controls[name]
+        if control is None:
+            return None
+        value = self.read_value(self._control_elements[control]["element"])
+        if name == "Format":
+            return SampleFormat(value)
+        return value
 
     def read_all(self):
-        active =  self.read_value(self._elem_active)
-        rate =  self.read_value(self._elem_rate)
-        channels = self.read_value(self._elem_channels)
-        sample_format = SampleFormat(self.read_value(self._elem_format))
-        volume = self.read_value(self._elem_volume)
+        active =  self.read_control_value("Active")
+        rate =  self.read_control_value("Rate")
+        channels =  self.read_control_value("Channels")
+        sample_format = self.read_control_value("Format")
+        volume = self.read_control_value("Volume")
+        #TODO check if these are relevant for loopback and gadget
+        #print(f"Removed: {self._is_removed}, inactive: {self._is_inactive}")
         return DeviceParameters(active=active, sample_rate=rate, sample_format=sample_format, channels=channels, volume=volume)
 
 
     def pollingloop(self):
         while True:
-            time.sleep(0.001)
+            print("loop")
+            #time.sleep(0.001)
             pollres = self.poller.poll()
-            #print("poll result:", pollres)
             if pollres:
-                #print("handling events")
                 self.hctl.handle_events()
 
     def run(self):
@@ -227,46 +211,28 @@ class ControlListener:
             time.sleep(0.1)
             if self._new_events:
                 time.sleep(self.debounce_time)
-                #self.print_all()
-                while self._active_events:
-                    value = self._active_events.pop(0)
-                    print("Active changed to", value)
-                while self._channels_events:
-                    value = self._channels_events.pop(0)
-                    print("Channels changed to", value)
-                while self._format_events:
-                    value = self._format_events.pop(0)
-                    print("Format changed to", SampleFormat(value))
-                while self._rate_events:
-                    value = self._rate_events.pop(0)
-                    print("Rate changed to", value)
-                while self._volume_events:
-                    value = self._volume_events.pop(0)
-                    print("Volume changed to", value)
+                for desc, control in self._controls.items():
+                    if control is None:
+                        continue
+                    data = self._control_elements[control]
+                    while data["events"]:
+                        value = data["events"].pop(0)
+                        print(f"{desc} changed to", value)
 
                 if self.on_change is not None:
                     params = self.read_all()
                     self.on_change(params)
 
                 self._new_events = False
-                # print("loop", self._active_events, self._rate_events, self._format_events, self._channels_events)
+
 
     def set_on_change(self, function):
         self.on_change = function
 
 
-def print_params(params):
-    print("--- Current values ---")
-    print("Active:", params.active)
-    print("Rate:", params.sample_rate)
-    print("Channels:", params.channels)
-    print("Format:", params.sample_format)
-    print("Volume:", params.volume)
-    print()
-
 if __name__ == "__main__":
     listener = ControlListener("hw:Loopback,1,0")
     def notifier(params):
-        print_params(params)
+        print(params)
     listener.set_on_change(notifier)
     listener.run()
