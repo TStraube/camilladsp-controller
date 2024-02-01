@@ -1,8 +1,12 @@
-from pyalsa import alsahcontrol
 import sys
 import time
 import select
 import threading
+
+from dataclasses import dataclass
+from enum import Enum
+
+from pyalsa import alsahcontrol
 
 LOOPBACK_ACTIVE = "PCM Slave Active"
 LOOPBACK_CHANNELS = "PCM Slave Channels"
@@ -18,62 +22,67 @@ EVENT_VALUE = alsahcontrol.event_mask["VALUE"]
 EVENT_INFO = alsahcontrol.event_mask["INFO"]
 EVENT_REMOVE = alsahcontrol.event_mask_remove
 
-SAMPLE_FORMATS_BY_NAME = {
-    "S8": 0,
-    "U8": 1,
-    "S16_LE": 2,
-    "S16_BE": 3,
-    "U16_LE": 4,
-    "U16_BE": 5,
-    "S24_LE": 6,
-    "S24_BE": 7,
-    "U24_LE": 8,
-    "U24_BE": 9,
-    "S32_LE": 10,
-    "S32_BE": 11,
-    "U32_LE": 12,
-    "U32_BE": 13,
-    "FLOAT_LE": 14,
-    "FLOAT_BE": 15,
-    "FLOAT64_LE": 16,
-    "FLOAT64_BE": 17,
-    "IEC958_SUBFRAME_LE": 18,
-    "IEC958_SUBFRAME_BE": 19,
-    "MU_LAW": 20,
-    "A_LAW": 21,
-    "IMA_ADPCM": 22,
-    "MPEG": 23,
-    "GSM": 24,
-    "S20_LE": 25,
-    "S20_BE": 26,
-    "U20_LE": 27,
-    "U20_BE": 28,
-    "SPECIAL": 31,
-    "S24_3LE": 32,
-    "S24_3BE": 33,
-    "U24_3LE": 34,
-    "U24_3BE": 35,
-    "S20_3LE": 36,
-    "S20_3BE": 37,
-    "U20_3LE": 38,
-    "U20_3BE": 39,
-    "S18_3LE": 40,
-    "S18_3BE": 41,
-    "U18_3LE": 42,
-    "U18_3BE": 43,
-    "G723_24": 44,
-    "G723_24_1B": 45,
-    "G723_40": 46,
-    "G723_40_1B": 47,
-    "DSD_U8": 48,
-    "DSD_U16_LE": 49,
-    "DSD_U32_LE": 50,
-    "DSD_U16_BE": 51,
-    "DSD_U32_BE": 52,
-}
+class SampleFormat(Enum):
+    S8 = 0
+    U8 = 1
+    S16_LE = 2
+    S16_BE = 3
+    U16_LE = 4
+    U16_BE = 5
+    S24_LE = 6
+    S24_BE = 7
+    U24_LE = 8
+    U24_BE = 9
+    S32_LE = 10
+    S32_BE = 11
+    U32_LE = 12
+    U32_BE = 13
+    FLOAT_LE = 14
+    FLOAT_BE = 15
+    FLOAT64_LE = 16
+    FLOAT64_BE = 17
+    IEC958_SUBFRAME_LE = 18
+    IEC958_SUBFRAME_BE = 19
+    MU_LAW = 20
+    A_LAW = 21
+    IMA_ADPCM = 22
+    MPEG = 23
+    GSM = 24
+    S20_LE = 25
+    S20_BE = 26
+    U20_LE = 27
+    U20_BE = 28
+    SPECIAL = 31
+    S24_3LE = 32
+    S24_3BE = 33
+    U24_3LE = 34
+    U24_3BE = 35
+    S20_3LE = 36
+    S20_3BE = 37
+    U20_3LE = 38
+    U20_3BE = 39
+    S18_3LE = 40
+    S18_3BE = 41
+    U18_3LE = 42
+    U18_3BE = 43
+    G723_24 = 44
+    G723_24_1B = 45
+    G723_40 = 46
+    G723_40_1B = 47
+    DSD_U8 = 48
+    DSD_U16_LE = 49
+    DSD_U32_LE = 50
+    DSD_U16_BE = 51
+    DSD_U32_BE = 52
 
-SAMPLE_FORMATS_BY_NUMBER = {nbr: desc for desc, nbr in SAMPLE_FORMATS_BY_NAME.items()}
 
+@dataclass
+class DeviceParameters:
+    active: bool | None
+    sample_rate: int | None
+    sample_format: SampleFormat | None
+    channels: int | None
+    volume: float | None
 
 class ControlListener:
     def __init__(self, device):
@@ -82,38 +91,37 @@ class ControlListener:
             self._card, mode=alsahcontrol.open_mode["NONBLOCK"]
         )
 
-        self.elements = self.hctl.list()
+        self.all_device_controls = self.hctl.list()
 
-        self._active = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
-        self._channels = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
-        self._format = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
-        self._rate = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
-        if self._rate is None:
-            self._rate = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
+        self._ctl_active = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
+        self._ctl_channels = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
+        self._ctl_format = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
+        self._ctl_rate = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
+        if self._ctl_rate is None:
+            self._ctl_rate = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
+        self._ctl_volume = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
 
-        self._volume = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
+        self._elem_active = None
+        self._elem_channels = None
+        self._elem_format = None
+        self._elem_rate = None
+        self._elem_volume = None
 
-        self._active_elem = None
-        self._channels_elem = None
-        self._format_elem = None
-        self._rate_elem = None
-        self._volume_elem = None
-
-        if self._active is not None:
-            self._active_elem = alsahcontrol.Element(self.hctl, self._active)
-            self._active_elem.set_callback(self)
-        if self._channels is not None:
-            self._channels_elem = alsahcontrol.Element(self.hctl, self._channels)
-            self._channels_elem.set_callback(self)
-        if self._format is not None:
-            self._format_elem = alsahcontrol.Element(self.hctl, self._format)
-            self._format_elem.set_callback(self)
-        if self._rate is not None:
-            self._rate_elem = alsahcontrol.Element(self.hctl, self._rate)
-            self._rate_elem.set_callback(self)
-        if self._volume is not None:
-            self._volume_elem = alsahcontrol.Element(self.hctl, self._volume)
-            self._volume_elem.set_callback(self)
+        if self._ctl_active is not None:
+            self._elem_active = alsahcontrol.Element(self.hctl, self._ctl_active)
+            self._elem_active.set_callback(self)
+        if self._ctl_channels is not None:
+            self._elem_channels = alsahcontrol.Element(self.hctl, self._ctl_channels)
+            self._elem_channels.set_callback(self)
+        if self._ctl_format is not None:
+            self._elem_format = alsahcontrol.Element(self.hctl, self._ctl_format)
+            self._elem_format.set_callback(self)
+        if self._ctl_rate is not None:
+            self._elem_rate = alsahcontrol.Element(self.hctl, self._ctl_rate)
+            self._elem_rate.set_callback(self)
+        if self._ctl_volume is not None:
+            self._elem_volume = alsahcontrol.Element(self.hctl, self._ctl_volume)
+            self._elem_volume.set_callback(self)
 
         self._active_events = []
         self._channels_events = []
@@ -126,6 +134,10 @@ class ControlListener:
         self.poller = select.poll()
         for fd in self.hctl.poll_fds:
             self.poller.register(fd[0], fd[1])
+
+        self.on_change = None
+
+        self.debounce_time = 0.01
 
     def get_card_device_subdevice(self, dev):
         parts = dev.split(",")
@@ -145,7 +157,7 @@ class ControlListener:
         if subdevice is None:
             subdevice=self.subdev_nbr
         found = None
-        for idx, iface, dev, subdev, name, _ in self.elements:
+        for idx, iface, dev, subdev, name, _ in self.all_device_controls:
             #print("search", idx, dev, subdev, name)
             if (
                 name == wanted_name
@@ -178,33 +190,26 @@ class ControlListener:
         elif mask & EVENT_VALUE:
             val = self.read_value(el)
             self._new_events = True
-            if el.numid == self._active:
+            if el.numid == self._ctl_active:
                 self._active_events.append(val)
-            elif el.numid == self._channels:
+            elif el.numid == self._ctl_channels:
                 self._channels_events.append(val)
-            elif el.numid == self._format:
+            elif el.numid == self._ctl_format:
                 self._format_events.append(val)
-            elif el.numid == self._rate:
+            elif el.numid == self._ctl_rate:
                 self._rate_events.append(val)
+            elif el.numid == self._ctl_volume:
+                self._volume_events.append(val)
 
 
     def read_all(self):
-        active =  self.read_value(self._active_elem)
-        rate =  self.read_value(self._rate_elem)
-        channels = self.read_value(self._channels_elem)
-        sample_format = SAMPLE_FORMATS_BY_NUMBER.get(self.read_value(self._format_elem))
-        volume = self.read_value(self._volume_elem)
-        return (active, rate, channels, sample_format, volume)
+        active =  self.read_value(self._elem_active)
+        rate =  self.read_value(self._elem_rate)
+        channels = self.read_value(self._elem_channels)
+        sample_format = SampleFormat(self.read_value(self._elem_format))
+        volume = self.read_value(self._elem_volume)
+        return DeviceParameters(active=active, sample_rate=rate, sample_format=sample_format, channels=channels, volume=volume)
 
-    def print_all(self):
-        (active, rate, channels, sample_format, volume) = self.read_all()
-        print("--- Current values ---")
-        print("Active:", active)
-        print("Rate:", rate)
-        print("Channels:", channels)
-        print("Format:", sample_format)
-        print("Volume:", volume)
-        print()
 
     def pollingloop(self):
         while True:
@@ -221,28 +226,47 @@ class ControlListener:
         while True:
             time.sleep(0.1)
             if self._new_events:
+                time.sleep(self.debounce_time)
                 #self.print_all()
                 while self._active_events:
-                    value = self._active_events.pop()
+                    value = self._active_events.pop(0)
                     print("Active changed to", value)
                 while self._channels_events:
-                    value = self._channels_events.pop()
+                    value = self._channels_events.pop(0)
                     print("Channels changed to", value)
                 while self._format_events:
-                    value = self._format_events.pop()
-                    print("Format changed to", SAMPLE_FORMATS_BY_NUMBER.get(value))
+                    value = self._format_events.pop(0)
+                    print("Format changed to", SampleFormat(value))
                 while self._rate_events:
-                    value = self._rate_events.pop()
+                    value = self._rate_events.pop(0)
                     print("Rate changed to", value)
                 while self._volume_events:
-                    value = self._volume_events.pop()
+                    value = self._volume_events.pop(0)
                     print("Volume changed to", value)
 
+                if self.on_change is not None:
+                    params = self.read_all()
+                    self.on_change(params)
 
                 self._new_events = False
                 # print("loop", self._active_events, self._rate_events, self._format_events, self._channels_events)
 
+    def set_on_change(self, function):
+        self.on_change = function
+
+
+def print_params(params):
+    print("--- Current values ---")
+    print("Active:", params.active)
+    print("Rate:", params.sample_rate)
+    print("Channels:", params.channels)
+    print("Format:", params.sample_format)
+    print("Volume:", params.volume)
+    print()
 
 if __name__ == "__main__":
     listener = ControlListener("hw:Loopback,1,0")
+    def notifier(params):
+        print_params(params)
+    listener.set_on_change(notifier)
     listener.run()
