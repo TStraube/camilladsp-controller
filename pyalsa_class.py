@@ -75,6 +75,11 @@ class SampleFormat(Enum):
     DSD_U16_BE = 51
     DSD_U32_BE = 52
 
+class DeviceEvent(Enum):
+    STOPPED = 0
+    STARTED = 1
+    RATE_CHANGED = 2
+    VOLUME_CHANGED = 3
 
 @dataclass
 class DeviceParameters:
@@ -83,6 +88,7 @@ class DeviceParameters:
     sample_format: SampleFormat | None
     channels: int | None
     volume: float | None
+    last_event: DeviceEvent | None
 
 class ControlListener:
     def __init__(self, device):
@@ -120,6 +126,9 @@ class ControlListener:
         self.on_change = None
 
         self.debounce_time = 0.01
+
+        self.poll_thread = None
+        self.handler_thread = None
 
     def get_card_device_subdevice(self, dev):
         parts = dev.split(",")
@@ -193,7 +202,7 @@ class ControlListener:
         volume = self.read_control_value("Volume")
         #TODO check if these are relevant for loopback and gadget
         #print(f"Removed: {self._is_removed}, inactive: {self._is_inactive}")
-        return DeviceParameters(active=active, sample_rate=rate, sample_format=sample_format, channels=channels, volume=volume)
+        return DeviceParameters(active=active, sample_rate=rate, sample_format=sample_format, channels=channels, volume=volume, last_event=None)
 
 
     def pollingloop(self):
@@ -205,8 +214,13 @@ class ControlListener:
                 self.hctl.handle_events()
 
     def run(self):
-        th = threading.Thread(target=self.pollingloop, daemon=True)
-        th.start()
+        self.poll_thread = threading.Thread(target=self.pollingloop, daemon=True)
+        self.poll_thread.start()
+        self.handler_thread = threading.Thread(target=self.event_handler, daemon=True)
+        self.handler_thread.start()
+
+    def event_handler(self):
+        device_params = self.read_all()
         while True:
             time.sleep(0.1)
             if self._new_events:
@@ -220,10 +234,39 @@ class ControlListener:
                         print(f"{desc} changed to", value)
 
                 if self.on_change is not None:
+                    print("callback..")
                     params = self.read_all()
+                    self.set_device_event(params, device_params)
+                    device_params = params
                     self.on_change(params)
 
                 self._new_events = False
+
+    # Compare new and old params to see what changed
+    def set_device_event(self, new_params, prev_params):
+        # Only rate and active/paused for now
+        # Loopback has a separate control for active status
+        if new_params.active is not None and not new_params.active and prev_params.active:
+            new_params.last_event = DeviceEvent.STOPPED
+        elif new_params.active is not None and new_params.active and not prev_params.active:
+            new_params.last_event = DeviceEvent.STARTED
+
+        # Gadget indicates inactive status by setting rate to 0
+        elif new_params.sample_rate is not None and new_params.sample_rate == 0 and prev_params.sample_rate > 0:
+            new_params.last_event = DeviceEvent.STOPPED
+        elif new_params.sample_rate is not None and new_params.sample_rate > 0 and prev_params.sample_rate == 0:
+            new_params.last_event = DeviceEvent.STARTED
+
+        # Rate changed
+        elif new_params.sample_rate is not None and new_params.sample_rate != prev_params.sample_rate:
+            new_params.last_event = DeviceEvent.RATE_CHANGED
+
+        # Volume changed
+        elif new_params.volume is not None and new_params.valume != prev_params.volume:
+            new_params.last_event = DeviceEvent.VOLUME_CHANGED
+
+        else:
+            new_params.last_event = None
 
 
     def set_on_change(self, function):
@@ -231,7 +274,8 @@ class ControlListener:
 
 
 if __name__ == "__main__":
-    listener = ControlListener("hw:Loopback,1,0")
+    device = sys.argv[1]
+    listener = ControlListener(device)
     def notifier(params):
         print(params)
     listener.set_on_change(notifier)
