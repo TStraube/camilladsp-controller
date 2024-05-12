@@ -3,14 +3,14 @@ import time
 from copy import deepcopy
 import yaml
 import argparse
+import platform
 
 from camilladsp import CamillaClient, ProcessingState, StopReason
 
 
-try:
-    # TODO linux only
+if platform.system() == "Linux":
     from pyalsa_class import ControlListener
-except ModuleNotFoundError:
+else:
     from dummy_listener import ControlListener
 
 class CamillaController():
@@ -200,8 +200,8 @@ class SpecificConfigs(CamillaConfig):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='CamillaDSP controller')
-    # TODO linux only
-    parser.add_argument('-d', '--device', help='Alsa device to monitor (Linux only)')
+    if platform.system() == "Linux":
+        parser.add_argument('-d', '--device', help='Alsa device to monitor (Linux only)')
     parser.add_argument('-s', '--specific', help='Template for paths to config files for specific wave formats')
     parser.add_argument('-a', '--adapt', help='Path to a config file that can be adapted to new sample rates')
     parser.add_argument('-p', '--port', help='CamillaDSP websocket port', type=int, required=True)
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     if args.specific is None and args.adapt is None:
         parser.error("At least one of '--specific' and '--adapt' must be provided")
 
-    if args.device is not None:
+    if platform.system() == "Linux" and args.device is not None:
         listener = ControlListener(args.device)
     else:
         listener = None
