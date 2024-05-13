@@ -4,7 +4,7 @@ import select
 import threading
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto
 
 from pyalsa import alsahcontrol
 
@@ -12,7 +12,7 @@ LOOPBACK_ACTIVE = "PCM Slave Active"
 LOOPBACK_CHANNELS = "PCM Slave Channels"
 LOOPBACK_FORMAT = "PCM Slave Format"
 LOOPBACK_RATE = "PCM Slave Rate"
-LOOPBACK_VOLUME = "PCM Playback Volume"
+#LOOPBACK_VOLUME = "PCM Playback Volume"
 GADGET_PB_RATE = "Playback Rate"
 GADGET_CAP_RATE = "Capture Rate"
 
@@ -75,20 +75,49 @@ class SampleFormat(Enum):
     DSD_U16_BE = 51
     DSD_U32_BE = 52
 
+def alsa_format_to_cdsp(fmt):
+    if fmt == SampleFormat.S16_LE:
+        return "S16LE"
+    if fmt == SampleFormat.S24_3LE:
+        return "S24LE3"
+    if fmt == SampleFormat.S24_LE:
+        return "S24LE"
+    if fmt == SampleFormat.S32_LE:
+        return "S32LE"
+    if fmt == SampleFormat.FLOAT_LE:
+        return "FLOAT32LE"
+    if fmt == SampleFormat.FLOAT64_LE:
+        return "FLOAT64LE"
+
+
 class DeviceEvent(Enum):
-    STOPPED = 0
-    STARTED = 1
-    RATE_CHANGED = 2
-    VOLUME_CHANGED = 3
+
+    STOPPED = auto()
+    STARTED = auto()
+
+    def __new__(cls, value):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj._data = None
+        return obj
+
+    def set_data(self, value):
+        """
+        Set the custom data property of the enum.
+        """
+        self._data = value
+
+    @property
+    def data(self):
+        """Getter for the data property"""
+        return self._data
 
 @dataclass
-class DeviceParameters:
-    active: bool | None
+class WaveFormat:
     sample_rate: int | None
-    sample_format: SampleFormat | None
+    sample_format: str | None
     channels: int | None
-    volume: float | None
-    last_event: DeviceEvent | None
+
 
 class ControlListener:
     def __init__(self, device):
@@ -100,20 +129,19 @@ class ControlListener:
         self.all_device_controls = self.hctl.list()
 
         self._controls = {}
-        self._controls["Active"] = self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM)
-        self._controls["Channels"] = self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM)
-        self._controls["Format"] = self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM)
-        self._controls["Rate"] = self.find_element(LOOPBACK_RATE, INTERFACE_PCM)
-        if self._controls["Rate"] is None:
-            self._controls["Rate"] = self.find_element(GADGET_CAP_RATE, INTERFACE_PCM)
-        self._controls["Volume"] = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
+        self._controls["Loopback Active"] = {"index": self.find_element(LOOPBACK_ACTIVE, INTERFACE_PCM), "element": None}
+        self._controls["Loopback Channels"] = {"index": self.find_element(LOOPBACK_CHANNELS, INTERFACE_PCM), "element": None}
+        self._controls["Loopback Format"] = {"index": self.find_element(LOOPBACK_FORMAT, INTERFACE_PCM), "element": None}
+        self._controls["Loopback Rate"] = {"index": self.find_element(LOOPBACK_RATE, INTERFACE_PCM), "element": None}
+        self._controls["Gadget Rate"] = {"index": self.find_element(GADGET_CAP_RATE, INTERFACE_PCM), "element": None}
+        #self._controls["Volume"] = self.find_element(LOOPBACK_VOLUME, INTERFACE_MIXER, device=0, subdevice=0)
 
-        self._control_elements = {}
         for desc, control in self._controls.items():
-            if control is not None:
-                element = alsahcontrol.Element(self.hctl, control)
+            if control["index"] is not None:
+                element = alsahcontrol.Element(self.hctl, control["index"])
                 element.set_callback(self)
-                self._control_elements[control] = {"element": element, "events": []}
+                control["element"] = element
+                print(desc, control)
 
         self._new_events = False
         self._is_removed = False
@@ -129,6 +157,8 @@ class ControlListener:
 
         self.poll_thread = None
         self.handler_thread = None
+        self.wave_format = self.read_wave_format()
+        print(self.wave_format)
 
     def get_card_device_subdevice(self, dev):
         parts = dev.split(",")
@@ -171,6 +201,7 @@ class ControlListener:
         return values[0]
 
     def callback(self, el, mask):
+        print("hctl callback")
         if mask == EVENT_REMOVE:
             #TODO check if this is relevant for loopback and gadget
             self._is_removed = True
@@ -180,34 +211,61 @@ class ControlListener:
             if info.is_inactive:
                 self._is_inactive = True
         elif mask & EVENT_VALUE:
-            val = self.read_value(el)
-            self._new_events = True
-            if el.numid in self._control_elements:
-                self._control_elements[el.numid]["events"].append(val)
+            self.determine_action(el)
+
+
+    def determine_action(self, element):
+        value = self.read_value(element)
+        if self._controls["Loopback Format"]["element"] is not None and self._controls["Loopback Format"]["element"].numid == el.numid:
+            self.wave_format.sample_format = alsa_format_to_cdsp(SampleFormat(value))
+            print("Changed Loopback format")
+        elif self._controls["Loopback Rate"]["element"] is not None and self._controls["Loopback Rate"]["element"].numid == el.numid:
+            self.wave_format.sample_rate = value
+            print("Changed Loopback rate")
+        elif self._controls["Loopback Channels"]["element"] is not None and self._controls["Loopback Channels"]["element"].numid == el.numid:
+            self.wave_format.channels = value
+            print("Changed Loopback channels")
+        elif self._controls["Loopback Active"]["element"] is not None and self._controls["Loopback Active"]["element"].numid == el.numid:
+            if value:
+                self.emit_event(DeviceEvent.STARTED(self.wave_format))
+                print("Loopback active", self.wave_format)
+            else:
+                self.emit_event(DeviceEvent.STOPPED)
+                print("Loopback inactive")
+        elif self._controls["Gadget Rate"]["element"] is not None and self._controls["Gadget Rate"]["element"].numid == el.numid:
+            self.wave_format.sample_rate = value
+            if value > 0:
+                self.emit_event(DeviceEvent.STARTED(self.wave_format))
+                print("Gadget active", self.wave_format)
+            else:
+                self.emit_event(DeviceEvent.STOPPED)
+                print("Gadget inactive")
+
+    def emit_event(self, event):
+        if self.on_change is not None:
+            self.on_change(event)
 
     def read_control_value(self, name):
-        control = self._controls[name]
-        if control is None:
+        element = self._controls[name]["element"]
+        if element is None:
             return None
-        value = self.read_value(self._control_elements[control]["element"])
-        if name == "Format":
+        value = self.read_value(element)
+        if name.endswith("Format"):
             return SampleFormat(value)
         return value
 
-    def read_all(self):
-        active =  self.read_control_value("Active")
-        rate =  self.read_control_value("Rate")
-        channels =  self.read_control_value("Channels")
-        sample_format = self.read_control_value("Format")
-        volume = self.read_control_value("Volume")
-        #TODO check if these are relevant for loopback and gadget
-        #print(f"Removed: {self._is_removed}, inactive: {self._is_inactive}")
-        return DeviceParameters(active=active, sample_rate=rate, sample_format=sample_format, channels=channels, volume=volume, last_event=None)
-
+    def read_wave_format(self):
+        loopback_rate =  self.read_control_value("Loopback Rate")
+        loopback_channels =  self.read_control_value("Loopback Channels")
+        loopback_format = self.read_control_value("Loopback Format")
+        gadget_rate =  self.read_control_value("Gadget Rate")
+        if gadget_rate is not None:
+            return WaveFormat(sample_format=None, channels=None, sample_rate=gadget_rate)
+        return WaveFormat(sample_format=alsa_format_to_cdsp(loopback_format), channels=loopback_channels, sample_rate=loopback_rate) 
 
     def pollingloop(self):
         while True:
-            print("loop")
+            print("got some event(s)")
             #time.sleep(0.001)
             pollres = self.poller.poll()
             if pollres:
@@ -216,8 +274,8 @@ class ControlListener:
     def run(self):
         self.poll_thread = threading.Thread(target=self.pollingloop, daemon=True)
         self.poll_thread.start()
-        self.handler_thread = threading.Thread(target=self.event_handler, daemon=True)
-        self.handler_thread.start()
+        #self.handler_thread = threading.Thread(target=self.event_handler, daemon=True)
+        #self.handler_thread.start()
 
     def event_handler(self):
         device_params = self.read_all()
@@ -242,33 +300,6 @@ class ControlListener:
 
                 self._new_events = False
 
-    # Compare new and old params to see what changed
-    def set_device_event(self, new_params, prev_params):
-        # Only rate and active/paused for now
-        # Loopback has a separate control for active status
-        if new_params.active is not None and not new_params.active and prev_params.active:
-            new_params.last_event = DeviceEvent.STOPPED
-        elif new_params.active is not None and new_params.active and not prev_params.active:
-            new_params.last_event = DeviceEvent.STARTED
-
-        # Gadget indicates inactive status by setting rate to 0
-        elif new_params.sample_rate is not None and new_params.sample_rate == 0 and prev_params.sample_rate > 0:
-            new_params.last_event = DeviceEvent.STOPPED
-        elif new_params.sample_rate is not None and new_params.sample_rate > 0 and prev_params.sample_rate == 0:
-            new_params.last_event = DeviceEvent.STARTED
-
-        # Rate changed
-        elif new_params.sample_rate is not None and new_params.sample_rate != prev_params.sample_rate:
-            new_params.last_event = DeviceEvent.RATE_CHANGED
-
-        # Volume changed
-        elif new_params.volume is not None and new_params.valume != prev_params.volume:
-            new_params.last_event = DeviceEvent.VOLUME_CHANGED
-
-        else:
-            new_params.last_event = None
-
-
     def set_on_change(self, function):
         self.on_change = function
 
@@ -280,3 +311,4 @@ if __name__ == "__main__":
         print(params)
     listener.set_on_change(notifier)
     listener.run()
+    input("press enter to exit")
