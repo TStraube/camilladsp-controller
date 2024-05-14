@@ -38,7 +38,7 @@ class CamillaController:
             time.sleep(0.1)
             state = self.cdsp.general.state()
             if state == ProcessingState.INACTIVE:
-                #print("CamillaDSP is inactive")
+                # print("CamillaDSP is inactive")
                 stop_reason = self.cdsp.general.stop_reason()
                 if stop_reason == StopReason.CAPTUREFORMATCHANGE:
                     print("CamillaDSP stopped because the capture format changed")
@@ -55,7 +55,7 @@ class CamillaController:
                 elif stop_reason == StopReason.DONE:
                     print("Capture is done, no action")
                 elif stop_reason == StopReason.NONE:
-                    #print("Initial start")
+                    # print("Initial start")
                     self.start_cdsp()
                 elif stop_reason in (
                     StopReason.CAPTUREERROR,
@@ -92,7 +92,7 @@ class CamillaController:
         if self.config is not None:
             print("Starting CamillaDSP with new config")
             self.cdsp.config.set_active(self.config)
-        #else:
+        # else:
         #    print("No new config is available, not starting")
 
     def get_config_for_new_wave_format(
@@ -290,5 +290,3 @@ if __name__ == "__main__":
 
     controller = CamillaController(host, args.port, configs, listener)
     controller.main_loop()
-
-# python controller.py -p 1234 -s "/Users/henrik/repos/camilladsp-controller/kladd/bh_int_{samplerate}.yml" -a "/Users/henrik/repos/camilladsp-controller/kladd/bh_int_resampler.yml" -r 44100
