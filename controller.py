@@ -7,13 +7,15 @@ import platform
 
 from camilladsp import CamillaClient, ProcessingState, StopReason
 
+from datastructures import DeviceEvent
 
 if platform.system() == "Linux":
-    from pyalsa_class import ControlListener
+    from alsa_listener import ControlListener
 else:
     from dummy_listener import ControlListener
 
-class CamillaController():
+
+class CamillaController:
 
     def __init__(self, host, port, config_providers, listener):
         self.listener = listener
@@ -30,13 +32,13 @@ class CamillaController():
 
     def queue_event(self, params):
         self.events.append(params)
-    
+
     def main_loop(self):
         while True:
             time.sleep(0.1)
             state = self.cdsp.general.state()
             if state == ProcessingState.INACTIVE:
-                print("CamillaDSP is inactive")
+                #print("CamillaDSP is inactive")
                 stop_reason = self.cdsp.general.stop_reason()
                 if stop_reason == StopReason.CAPTUREFORMATCHANGE:
                     print("CamillaDSP stopped because the capture format changed")
@@ -46,14 +48,19 @@ class CamillaController():
                         self.stop_cdsp()
                         self.start_cdsp()
                     else:
-                        print("Sample rate changed, new value is unknown. Unable to continue")
+                        print(
+                            "Sample rate changed, new value is unknown. Unable to continue"
+                        )
                         sys.exit()
                 elif stop_reason == StopReason.DONE:
                     print("Capture is done, no action")
                 elif stop_reason == StopReason.NONE:
-                    print("Initial start")
+                    #print("Initial start")
                     self.start_cdsp()
-                elif stop_reason in (StopReason.CAPTUREERROR, stop_reason.PLAYBACKERROR):
+                elif stop_reason in (
+                    StopReason.CAPTUREERROR,
+                    stop_reason.PLAYBACKERROR,
+                ):
                     print("Stopped due to error, trying to restart", stop_reason)
                     self.start_cdsp()
                 elif stop_reason == StopReason.PLAYBACKFORMATCHANGE:
@@ -63,7 +70,20 @@ class CamillaController():
                 event = self.events.pop(0)
                 # handle each event
                 print(event)
-    
+                if event == DeviceEvent.STARTED:
+                    wave_format = event.data
+                    print("Device started with wave format", wave_format)
+                    self.get_config_for_new_wave_format(
+                        sample_rate=wave_format.sample_rate,
+                        sample_format=wave_format.sample_format,
+                        channels=wave_format.channels,
+                    )
+                    self.stop_cdsp()
+                    self.start_cdsp()
+                elif event == DeviceEvent.STOPPED:
+                    print("Device stopped")
+                    self.stop_cdsp()
+
     def stop_cdsp(self):
         print("Stopping CamillaDSP")
         self.cdsp.general.stop()
@@ -72,41 +92,53 @@ class CamillaController():
         if self.config is not None:
             print("Starting CamillaDSP with new config")
             self.cdsp.config.set_active(self.config)
-        else:
-            print("No new config is available, not starting")
+        #else:
+        #    print("No new config is available, not starting")
 
-    def get_config_for_new_wave_format(self, sample_rate=None, sample_format=None, channels=None):
-        print(f"Getting new config for rate: {sample_rate}, format: {sample_format}, channels: {channels}")
+    def get_config_for_new_wave_format(
+        self, sample_rate=None, sample_format=None, channels=None
+    ):
+        print(
+            f"Getting new config for rate: {sample_rate}, format: {sample_format}, channels: {channels}"
+        )
         for provider in self.config_providers:
             try:
-                provider.change_wave_format(sample_rate=sample_rate, sample_format=sample_format, channels=channels)
+                provider.change_wave_format(
+                    sample_rate=sample_rate,
+                    sample_format=sample_format,
+                    channels=channels,
+                )
                 self.config = provider.get_config()
                 if self.config is not None:
                     print(f"Using new config from {provider.name} provider")
                     return
             except Exception as e:
-                print(f"Provider {provider.name} is unable to supply a new config for this wave format")
-        print(f"No config available for rate: {sample_rate}, format: {sample_format}, channels: {channels}")
+                print(
+                    f"Provider {provider.name} is unable to supply a new config for this wave format"
+                )
+        print(
+            f"No config available for rate: {sample_rate}, format: {sample_format}, channels: {channels}"
+        )
         self.config = None
 
 
-
-
-class CamillaConfig():
+class CamillaConfig:
     name = "base class for config provider"
+
     def __init__(self):
         self.config = None
 
     def get_config(self):
         return self.config
-    
+
     def read_config(self, filename):
         with open(filename) as f:
             config = yaml.safe_load(f)
             return config
-    
+
     def change_wave_format(self, sample_rate=None, sample_format=None, channels=None):
         pass
+
 
 # Modify a single config file for different rates.
 # If the config has resampling, change only 'capture_samplerate' (and disable resamplng if it's not needed).
@@ -123,12 +155,15 @@ class AdaptConfig(CamillaConfig):
             print(f"No resampler defined, change 'samplerate' to {rate}")
             config["devices"]["samplerate"] = rate
             return
-        
+
         resampler_type = config["devices"]["resampler"]["type"]
         config["devices"]["capture_samplerate"] = rate
         print(f"Config has a resampler, change 'capture_samplerate' to {rate}")
 
-        if config["devices"]["capture_samplerate"] == config["devices"]["samplerate"] and resampler_type == "Synchronous":
+        if (
+            config["devices"]["capture_samplerate"] == config["devices"]["samplerate"]
+            and resampler_type == "Synchronous"
+        ):
             print("No need for a 1:1 sync resampler, removing")
             config["devices"]["resampler"] = None
 
@@ -199,20 +234,31 @@ class SpecificConfigs(CamillaConfig):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='CamillaDSP controller')
+    parser = argparse.ArgumentParser(description="CamillaDSP controller")
     if platform.system() == "Linux":
-        parser.add_argument('-d', '--device', help='Alsa device to monitor (Linux only)')
-    parser.add_argument('-s', '--specific', help='Template for paths to config files for specific wave formats')
-    parser.add_argument('-a', '--adapt', help='Path to a config file that can be adapted to new sample rates')
-    parser.add_argument('-p', '--port', help='CamillaDSP websocket port', type=int, required=True)
-    parser.add_argument('--host', help='CamillaDSP websocket host')
-    parser.add_argument('-f', '--format', help='Initial value for sample format')
-    parser.add_argument('-c', '--channels', help='Initial value for number of channels')
-    parser.add_argument('-r', '--rate', help='Initial value for sample rate')
-
+        parser.add_argument(
+            "-d", "--device", help="Alsa device to monitor (Linux only)"
+        )
+    parser.add_argument(
+        "-s",
+        "--specific",
+        help="Template for paths to config files for specific wave formats",
+    )
+    parser.add_argument(
+        "-a",
+        "--adapt",
+        help="Path to a config file that can be adapted to new sample rates",
+    )
+    parser.add_argument(
+        "-p", "--port", help="CamillaDSP websocket port", type=int, required=True
+    )
+    parser.add_argument("--host", help="CamillaDSP websocket host")
+    parser.add_argument("-f", "--format", help="Initial value for sample format")
+    parser.add_argument("-c", "--channels", help="Initial value for number of channels")
+    parser.add_argument("-r", "--rate", help="Initial value for sample rate")
 
     args = parser.parse_args()
-    
+
     if args.specific is None and args.adapt is None:
         parser.error("At least one of '--specific' and '--adapt' must be provided")
 
@@ -228,7 +274,9 @@ if __name__ == "__main__":
     configs = []
     if args.specific is not None:
         try:
-            config = SpecificConfigs(args.specific, args.rate, args.format, args.channels)
+            config = SpecificConfigs(
+                args.specific, args.rate, args.format, args.channels
+            )
             configs.append(config)
         except Exception as e:
             raise e
