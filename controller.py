@@ -233,11 +233,11 @@ class SpecificConfigs(CamillaConfig):
         self.config = self.read_config(self.filename())
 
 
-if __name__ == "__main__":
+def parse_args():
     parser = argparse.ArgumentParser(description="CamillaDSP controller")
     if platform.system() == "Linux":
         parser.add_argument(
-            "-d", "--device", help="Alsa device to monitor (Linux only)"
+            "-d", "--device", help="Alsa device to monitor"
         )
     parser.add_argument(
         "-s",
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p", "--port", help="CamillaDSP websocket port", type=int, required=True
     )
-    parser.add_argument("--host", help="CamillaDSP websocket host")
+    parser.add_argument("--host", help="CamillaDSP websocket host", default="localhost")
     parser.add_argument("-f", "--format", help="Initial value for sample format")
     parser.add_argument("-c", "--channels", help="Initial value for number of channels")
     parser.add_argument("-r", "--rate", help="Initial value for sample rate")
@@ -262,15 +262,16 @@ if __name__ == "__main__":
     if args.specific is None and args.adapt is None:
         parser.error("At least one of '--specific' and '--adapt' must be provided")
 
+    return parser, args
+
+
+def get_listener(args):
     if platform.system() == "Linux" and args.device is not None:
         listener = ControlListener(args.device)
     else:
         listener = None
 
-    host = args.host
-    if host is None:
-        host = "localhost"
-
+def get_config_providers(parser, args):
     configs = []
     if args.specific is not None:
         try:
@@ -279,7 +280,6 @@ if __name__ == "__main__":
             )
             configs.append(config)
         except Exception as e:
-            raise e
             parser.error(str(e))
     if args.adapt is not None:
         try:
@@ -287,6 +287,14 @@ if __name__ == "__main__":
             configs.append(config)
         except Exception as e:
             parser.error(str(e))
+    return configs
 
-    controller = CamillaController(host, args.port, configs, listener)
+if __name__ == "__main__":
+    parser, args = parse_args()
+
+    listener = get_listener(args)
+
+    configs = get_config_providers(parser, args)
+
+    controller = CamillaController(args.host, args.port, configs, listener)
     controller.main_loop()
