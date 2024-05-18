@@ -5,15 +5,14 @@ import yaml
 import argparse
 import platform
 
-from camilladsp import CamillaClient, ProcessingState, StopReason
+from camilladsp import CamillaClient, ProcessingState, StopReason, CamillaError
 
 from datastructures import DeviceEvent
 
 if platform.system() == "Linux":
-    from alsa_listener import ControlListener
-else:
-    from dummy_listener import ControlListener
+    from alsa_listener import AlsaControlListener
 
+RUNNING_STATES = (ProcessingState.RUNNING, ProcessingState.PAUSED, ProcessingState.STALLED, ProcessingState.STARTING)
 
 class CamillaController:
 
@@ -22,21 +21,36 @@ class CamillaController:
         self.host = host
         self.port = port
         self.config_providers = config_providers
-        self.config = None
         self.events = []
         self.cdsp = CamillaClient(self.host, self.port)
         self.cdsp.connect()
         if self.listener is not None:
             self.listener.set_on_change(self.queue_event)
             self.listener.run()
-        self.running = True
+        self.expected_running = None
+        self.error_on_start = False
+        self.get_config_for_new_wave_format()
 
     def queue_event(self, params):
         self.events.append(params)
 
     def debouce_event_queue(self):
-        for n, event in enumerate(self.events):
-            pass
+        # If the queue contains a stop event, remove any start and stop events before this
+        events_to_remove = []
+        stop_found = False
+        # Iterate through the list from the end
+        for n, event in enumerate(reversed(self.events)):
+            if not stop_found and event == DeviceEvent.STOPPED:
+                # This is the first stop event we encounter
+                stop_found = True
+            elif stop_found and event in (DeviceEvent.STARTED, DeviceEvent.STOPPED):
+                # This start or stop event is followed by a stop, mark it for removal
+                events_to_remove.append(n)
+        orig_len = len(self.events)
+        for rev_idx in events_to_remove:
+            idx = orig_len - rev_idx - 1
+            # the indexes are sorted in decreasing order, safe to just pop
+            self.events.pop(idx)
 
 
     def main_loop(self):
@@ -52,6 +66,9 @@ class CamillaController:
                 print(event)
                 if event == DeviceEvent.STARTED:
                     wave_format = event.data
+                    # re-read wave format here!
+                    if self.listener is not None:
+                        wave_format = listener.read_wave_format()
                     print("Device started with wave format", wave_format)
                     self.get_config_for_new_wave_format(
                         sample_rate=wave_format.sample_rate,
@@ -70,28 +87,35 @@ class CamillaController:
                 # print("CamillaDSP is inactive")
                 stop_reason = self.cdsp.general.stop_reason()
                 if stop_reason == StopReason.CAPTUREFORMATCHANGE:
-                    print("CamillaDSP stopped because the capture format changed")
-                    new_rate = stop_reason.data
-                    if new_rate > 0:
-                        self.get_config_for_new_wave_format(sample_rate=new_rate)
-                        self.stop_cdsp()
-                        self.start_cdsp()
-                    else:
-                        print(
-                            "Sample rate changed, new value is unknown. Unable to continue"
-                        )
-                        sys.exit()
+                    if not self.error_on_start:
+                        print("CamillaDSP stopped because the capture format changed")
+                        new_rate = stop_reason.data
+                        # re-read wave format here!
+                        if self.listener is not None:
+                            wave_format = listener.read_wave_format()
+                            if wave_format.sample_rate is not None:
+                                new_rate = wave_format.sample_rate
+                        if new_rate > 0:
+                            self.get_config_for_new_wave_format(sample_rate=new_rate)
+                            self.stop_cdsp()
+                            self.start_cdsp()
+                        else:
+                            print(
+                                "Sample rate changed, new value is unknown. Unable to get get a new config"
+                            )
                 elif stop_reason == StopReason.DONE:
                     print("Capture is done, no action")
                 elif stop_reason == StopReason.NONE:
                     # print("Initial start")
-                    self.start_cdsp()
+                    if not self.error_on_start:
+                        self.start_cdsp()
                 elif stop_reason in (
                     StopReason.CAPTUREERROR,
-                    stop_reason.PLAYBACKERROR,
+                    StopReason.PLAYBACKERROR,
                 ):
-                    print("Stopped due to error, trying to restart", stop_reason)
-                    self.start_cdsp()
+                    if not self.error_on_start:
+                        print("Stopped due to error, trying to restart", stop_reason)
+                        self.start_cdsp()
                 elif stop_reason == StopReason.PLAYBACKFORMATCHANGE:
                     print("Playback format changed, ")
 
@@ -105,11 +129,25 @@ class CamillaController:
     def stop_cdsp(self):
         print("Stopping CamillaDSP")
         self.cdsp.general.stop()
+        self.expected_running = False
+        self.error_on_start = False
 
     def start_cdsp(self):
         if self.config is not None:
             print("Starting CamillaDSP with new config")
-            self.cdsp.config.set_active(self.config)
+            try:
+                self.cdsp.config.set_active(self.config)
+                self.expected_running = True
+                self.error_on_start = False
+                print("Started")
+            except CamillaError as e:
+                print("Unable to start, error:", e)
+                self.expected_running = True
+                self.error_on_start = True
+        else:
+            print("No config available, ignoring start request")
+
+
         # else:
         #    print("No new config is available, not starting")
 
@@ -285,9 +323,10 @@ def parse_args():
 
 def get_listener(args):
     if platform.system() == "Linux" and args.device is not None:
-        listener = ControlListener(args.device)
+        listener = AlsaControlListener(args.device)
     else:
         listener = None
+    # TODO Add listeners for Wasapi and CoreAudio
 
 def get_config_providers(parser, args):
     configs = []

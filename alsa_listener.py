@@ -10,6 +10,7 @@ from enum import Enum
 
 from pyalsa import alsahcontrol
 
+from device_listener import DeviceListener
 from datastructures import WaveFormat, DeviceEvent
 
 LOOPBACK_ACTIVE = "PCM Slave Active"
@@ -91,9 +92,6 @@ def alsa_format_to_cdsp(fmt):
         return "FLOAT64LE"
 
 
-
-
-
 @dataclass
 class Control:
     index: int | None
@@ -101,7 +99,7 @@ class Control:
     value_transform_func: Callable | None
 
 
-class ControlListener:
+class AlsaControlListener(DeviceListener):
     def __init__(self, device, debounce_time=0.05):
 
         self.on_change = None
