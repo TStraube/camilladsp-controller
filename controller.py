@@ -11,6 +11,8 @@ from datastructures import DeviceEvent
 
 if platform.system() == "Linux":
     from alsa_listener import AlsaControlListener
+if platform.system() == "Darwin":
+    from ca_listener import CAListener
 
 RUNNING_STATES = (ProcessingState.RUNNING, ProcessingState.PAUSED, ProcessingState.STALLED, ProcessingState.STARTING)
 
@@ -93,6 +95,7 @@ class CamillaController:
                         # re-read wave format here!
                         if self.listener is not None:
                             wave_format = listener.read_wave_format()
+                            print("Updated", wave_format)
                             if wave_format.sample_rate is not None:
                                 new_rate = wave_format.sample_rate
                         if new_rate > 0:
@@ -291,9 +294,9 @@ class SpecificConfigs(CamillaConfig):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CamillaDSP controller")
-    if platform.system() == "Linux":
+    if platform.system() in ("Linux", "Darwin"):
         parser.add_argument(
-            "-d", "--device", help="Alsa device to monitor"
+            "-d", "--device", help="Name of capture device to monitor"
         )
     parser.add_argument(
         "-s",
@@ -324,9 +327,12 @@ def parse_args():
 def get_listener(args):
     if platform.system() == "Linux" and args.device is not None:
         listener = AlsaControlListener(args.device)
+    if platform.system() == "Darwin" and args.device is not None:
+        listener = CAListener(args.device)
     else:
         listener = None
-    # TODO Add listeners for Wasapi and CoreAudio
+    # TODO Add listeners for Wasapi
+    return listener
 
 def get_config_providers(parser, args):
     configs = []
