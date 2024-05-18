@@ -29,13 +29,42 @@ class CamillaController:
         if self.listener is not None:
             self.listener.set_on_change(self.queue_event)
             self.listener.run()
+        self.running = True
 
     def queue_event(self, params):
         self.events.append(params)
 
+    def debouce_event_queue(self):
+        for n, event in enumerate(self.events):
+            pass
+
+
     def main_loop(self):
         while True:
-            time.sleep(0.1)
+            time.sleep(0.2)
+
+            # Handle any change events from the device
+            if len(self.events) > 1:
+                self.debounce_event_queue()
+            while len(self.events) > 0:
+                event = self.events.pop(0)
+                # handle each event
+                print(event)
+                if event == DeviceEvent.STARTED:
+                    wave_format = event.data
+                    print("Device started with wave format", wave_format)
+                    self.get_config_for_new_wave_format(
+                        sample_rate=wave_format.sample_rate,
+                        sample_format=wave_format.sample_format,
+                        channels=wave_format.channels,
+                    )
+                    self.stop_cdsp()
+                    self.start_cdsp()
+                elif event == DeviceEvent.STOPPED:
+                    print("Device stopped")
+                    self.stop_cdsp()
+
+            # Query CamillaDSP for status
             state = self.cdsp.general.state()
             if state == ProcessingState.INACTIVE:
                 # print("CamillaDSP is inactive")
@@ -66,23 +95,12 @@ class CamillaController:
                 elif stop_reason == StopReason.PLAYBACKFORMATCHANGE:
                     print("Playback format changed, ")
 
-            while len(self.events) > 0:
-                event = self.events.pop(0)
-                # handle each event
-                print(event)
-                if event == DeviceEvent.STARTED:
-                    wave_format = event.data
-                    print("Device started with wave format", wave_format)
-                    self.get_config_for_new_wave_format(
-                        sample_rate=wave_format.sample_rate,
-                        sample_format=wave_format.sample_format,
-                        channels=wave_format.channels,
-                    )
-                    self.stop_cdsp()
-                    self.start_cdsp()
-                elif event == DeviceEvent.STOPPED:
-                    print("Device stopped")
-                    self.stop_cdsp()
+    def run(self):
+        try:
+            self.main_loop()
+        except KeyboardInterrupt:
+            print("Shutting down...")
+
 
     def stop_cdsp(self):
         print("Stopping CamillaDSP")
@@ -297,4 +315,4 @@ if __name__ == "__main__":
     configs = get_config_providers(parser, args)
 
     controller = CamillaController(args.host, args.port, configs, listener)
-    controller.main_loop()
+    controller.run()
