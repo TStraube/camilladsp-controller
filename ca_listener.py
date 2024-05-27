@@ -2,7 +2,13 @@ import cffi
 
 from datastructures import WaveFormat, DeviceEvent
 from device_listener import DeviceListener
-from _ca_listener import ffi, lib
+try:
+    from _ca_listener import ffi, lib
+except ImportError:
+    print("Compiling bindings, this will only be done on the first run.")
+    import ca_listener_build
+    ca_listener_build.run_build()
+    from _ca_listener import ffi, lib
 
 def to_int(bytes):
     return int.from_bytes(bytes, byteorder='big')
@@ -29,6 +35,9 @@ class CAListener(DeviceListener):
         self.listening = False
 
         self.self_ref = ffi.new_handle(self)
+
+    def __del__(self):
+        self.stop()
 
     def _property_address(self, selector, scope=kAudioObjectPropertyScopeGlobal, element=kAudioObjectPropertyElementMaster):
         prop = ffi.new("AudioObjectPropertyAddress*",
@@ -117,21 +126,23 @@ def property_listener(inObjectID, _inNumberAddresses, _inAddresses, inClientData
     self.emit_event(start_event)
     return 0
 
-if __name__ == "__main__":
-    import sys
+def demo(device):
     import time
-    device = sys.argv[1]
     listener = CAListener(device)
 
-    def notifier(params):
+    def dummy_callback(params):
         print(params, params.data)
 
     print(listener.read_wave_format())
-    listener.set_on_change(notifier)
+    listener.set_on_change(dummy_callback)
     listener.run()
     try:
         while True:
             time.sleep(10)
     except KeyboardInterrupt:
-        pass
-    listener.stop()
+        print("Exit requested")
+
+if __name__ == "__main__":
+    import sys
+    device = sys.argv[1]
+    demo(device)

@@ -97,5 +97,8 @@ typedef struct AudioStreamBasicDescription  AudioStreamBasicDescription;
 
 """)
 
-if __name__ == "__main__":
+def run_build():
     ffibuilder.compile(verbose=True)
+
+if __name__ == "__main__":
+    run_build()
