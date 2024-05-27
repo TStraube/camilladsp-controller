@@ -4,6 +4,7 @@ from copy import deepcopy
 import yaml
 import argparse
 import platform
+from os.path import isfile
 
 from camilladsp import CamillaClient, ProcessingState, StopReason, CamillaError
 
@@ -14,7 +15,13 @@ if platform.system() == "Linux":
 if platform.system() == "Darwin":
     from ca_listener import CAListener
 
-RUNNING_STATES = (ProcessingState.RUNNING, ProcessingState.PAUSED, ProcessingState.STALLED, ProcessingState.STARTING)
+RUNNING_STATES = (
+    ProcessingState.RUNNING,
+    ProcessingState.PAUSED,
+    ProcessingState.STALLED,
+    ProcessingState.STARTING,
+)
+
 
 class CamillaController:
 
@@ -36,7 +43,7 @@ class CamillaController:
     def queue_event(self, params):
         self.events.append(params)
 
-    def debouce_event_queue(self):
+    def debounce_event_queue(self):
         # If the queue contains a stop event, remove any start and stop events before this
         events_to_remove = []
         stop_found = False
@@ -53,7 +60,6 @@ class CamillaController:
             idx = orig_len - rev_idx - 1
             # the indexes are sorted in decreasing order, safe to just pop
             self.events.pop(idx)
-
 
     def main_loop(self):
         while True:
@@ -128,7 +134,6 @@ class CamillaController:
         except KeyboardInterrupt:
             print("Shutting down...")
 
-
     def stop_cdsp(self):
         print("Stopping CamillaDSP")
         self.cdsp.general.stop()
@@ -149,7 +154,6 @@ class CamillaController:
                 self.error_on_start = True
         else:
             print("No config available, ignoring start request")
-
 
         # else:
         #    print("No new config is available, not starting")
@@ -197,6 +201,9 @@ class CamillaConfig:
 
     def change_wave_format(self, sample_rate=None, sample_format=None, channels=None):
         pass
+
+    def check_if_exists(self, filepath):
+        return isfile(filepath)
 
 
 # Modify a single config file for different rates.
@@ -267,7 +274,10 @@ class SpecificConfigs(CamillaConfig):
             missing.append("channels")
         if len(missing) > 0:
             raise ValueError(f"Missing initial values for {', '.join(missing)}")
-        self.config = self.read_config(self.filename())
+        try:
+            self.config = self.read_config(self.filename())
+        except FileNotFoundError:
+            self.config = None
 
     def filename(self):
         # same token format as in CamillaDSP itself
@@ -295,9 +305,7 @@ class SpecificConfigs(CamillaConfig):
 def parse_args():
     parser = argparse.ArgumentParser(description="CamillaDSP controller")
     if platform.system() in ("Linux", "Darwin"):
-        parser.add_argument(
-            "-d", "--device", help="Name of capture device to monitor"
-        )
+        parser.add_argument("-d", "--device", help="Name of capture device to monitor")
     parser.add_argument(
         "-s",
         "--specific",
@@ -334,12 +342,23 @@ def get_listener(args):
     # TODO Add listeners for Wasapi
     return listener
 
-def get_config_providers(parser, args):
+
+def get_config_providers(parser, args, wave_format=None):
     configs = []
+    sample_rate = args.rate
+    sample_format = args.format
+    channels = args.channels
+    if wave_format is not None:
+        if wave_format.sample_rate is not None:
+            sample_rate = wave_format.sample_rate
+        if wave_format.sample_format is not None:
+            sample_format = wave_format.sample_format
+        if wave_format.channels is not None:
+            channels = wave_format.channels
     if args.specific is not None:
         try:
             config = SpecificConfigs(
-                args.specific, args.rate, args.format, args.channels
+                args.specific, sample_rate, sample_format, channels
             )
             configs.append(config)
         except Exception as e:
@@ -352,12 +371,20 @@ def get_config_providers(parser, args):
             parser.error(str(e))
     return configs
 
+
 if __name__ == "__main__":
     parser, args = parse_args()
 
     listener = get_listener(args)
 
-    configs = get_config_providers(parser, args)
+    if listener is not None:
+        # Try to get the current wave format
+        wave_format = listener.read_wave_format()
+        print(wave_format)
+    else:
+        wave_format = None
+
+    configs = get_config_providers(parser, args, wave_format=wave_format)
 
     controller = CamillaController(args.host, args.port, configs, listener)
     controller.run()
