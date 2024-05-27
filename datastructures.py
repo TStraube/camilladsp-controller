@@ -2,7 +2,9 @@ from enum import Enum, auto
 from dataclasses import dataclass
 
 class DeviceEvent(Enum):
-
+    """
+    Enum represending the events a device listener can send.
+    """
     STOPPED = auto()
     STARTED = auto()
 
@@ -20,12 +22,18 @@ class DeviceEvent(Enum):
 
     @property
     def data(self):
-        """Getter for the data property"""
+        """
+        Getter for the data property
+        """
         return self._data
 
 
 @dataclass
 class WaveFormat:
+    """
+    A class representing a wave format, that consists of the sample rate,
+    sample format and number of channels.
+    """
     sample_rate: int | None
     sample_format: str | None
     channels: int | None
