@@ -1,19 +1,21 @@
 from cffi import FFI
+
 ffibuilder = FFI()
 
-ffibuilder.set_source("_ca_listener",
+# Build a native binding to selected parts of the CoreAudio API.
+# This is inspired by the CoreAudio bindings in the [SoundCard library](https://github.com/bastibe/SoundCard) by Bastian Bechtold.
+
+ffibuilder.set_source(
+    "_ca_listener",
     r"""
     #include <CoreAudio/CoreAudio.h>
-    //#include <CoreFoundation/CFBase.h>
-    //#include <CoreFoundation/CFString.h>
-    //#include <CoreAudio/AudioHardwareBase.h>
-    //#include <CoreAudio/AudioHardware.h>
-    //#include <CoreAudio/CoreAudioTypes.h>
     """,
     libraries=[],
-    extra_link_args=["-framework", "CoreAudio"])
+    extra_link_args=["-framework", "CoreAudio"],
+)
 
-ffibuilder.cdef("""
+ffibuilder.cdef(
+    """
 // from /System/Library/Frameworks/CoreFoundation/CFBase.h:
 typedef unsigned char           Boolean;
 typedef signed short            SInt16;
@@ -95,10 +97,13 @@ struct AudioStreamBasicDescription
 };
 typedef struct AudioStreamBasicDescription  AudioStreamBasicDescription;
 
-""")
+"""
+)
+
 
 def run_build():
     ffibuilder.compile(verbose=True)
+
 
 if __name__ == "__main__":
     run_build()

@@ -15,7 +15,13 @@ if platform.system() == "Linux":
 if platform.system() == "Darwin":
     from ca_listener import CAListener
 
-RUNNING_STATES = (ProcessingState.RUNNING, ProcessingState.PAUSED, ProcessingState.STALLED, ProcessingState.STARTING)
+RUNNING_STATES = (
+    ProcessingState.RUNNING,
+    ProcessingState.PAUSED,
+    ProcessingState.STALLED,
+    ProcessingState.STARTING,
+)
+
 
 class CamillaController:
 
@@ -54,7 +60,6 @@ class CamillaController:
             idx = orig_len - rev_idx - 1
             # the indexes are sorted in decreasing order, safe to just pop
             self.events.pop(idx)
-
 
     def main_loop(self):
         while True:
@@ -129,7 +134,6 @@ class CamillaController:
         except KeyboardInterrupt:
             print("Shutting down...")
 
-
     def stop_cdsp(self):
         print("Stopping CamillaDSP")
         self.cdsp.general.stop()
@@ -150,7 +154,6 @@ class CamillaController:
                 self.error_on_start = True
         else:
             print("No config available, ignoring start request")
-
 
         # else:
         #    print("No new config is available, not starting")
@@ -302,9 +305,7 @@ class SpecificConfigs(CamillaConfig):
 def parse_args():
     parser = argparse.ArgumentParser(description="CamillaDSP controller")
     if platform.system() in ("Linux", "Darwin"):
-        parser.add_argument(
-            "-d", "--device", help="Name of capture device to monitor"
-        )
+        parser.add_argument("-d", "--device", help="Name of capture device to monitor")
     parser.add_argument(
         "-s",
         "--specific",
@@ -341,6 +342,7 @@ def get_listener(args):
     # TODO Add listeners for Wasapi
     return listener
 
+
 def get_config_providers(parser, args, wave_format=None):
     configs = []
     sample_rate = args.rate
@@ -368,6 +370,7 @@ def get_config_providers(parser, args, wave_format=None):
         except Exception as e:
             parser.error(str(e))
     return configs
+
 
 if __name__ == "__main__":
     parser, args = parse_args()
